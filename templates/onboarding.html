@@ -1,0 +1,490 @@
+{% extends "base.html" %}
+
+{% block title %}Onboarding - VitalAI{% endblock %}
+
+{% block content %}
+<div class="onboarding-container">
+    <div class="onboarding-header">
+        <h1>Welcome to VitalAI</h1>
+        <p>Let's get you set up! This will only take a few minutes.</p>
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-text" id="progress-text">Step 1 of 5</div>
+    </div>
+    
+    <div class="chat-box" id="chat-box">
+        <div class="message assistant">
+            <div class="agent-badge">[ONBOARDING]</div>
+            <p>Welcome! I'm your onboarding assistant. I'll guide you through setting up your profile. This will only take a few minutes.</p>
+        </div>
+    </div>
+    
+    <div class="chat-input-container">
+        <div class="input-controls">
+            <select id="language-selector" class="language-selector" title="Select language">
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="hi">Hindi</option>
+                <option value="zh">Chinese</option>
+                <option value="ar">Arabic</option>
+                <option value="pt">Portuguese</option>
+                <option value="fr">French</option>
+            </select>
+            <button 
+                id="mic-btn" 
+                class="btn-icon" 
+                onclick="toggleRecording()" 
+                title="Record voice message"
+            >
+                <span id="mic-icon">🎤</span>
+            </button>
+        </div>
+        <input 
+            type="text" 
+            id="chat-input" 
+            placeholder="Type your answer here... (or click mic to speak)"
+            onkeypress="handleKeyPress(event)"
+        >
+        <button onclick="sendMessage()" class="btn btn-primary" id="send-btn">Send</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let chatHistory = [];
+    let isProcessing = false;
+    let selectedLanguage = 'en';
+    let currentStep = 'welcome';
+    let onboardingState = {};
+    
+    // Voice recording state
+    let isRecording = false;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    
+    // Check auth status on load
+    document.addEventListener('DOMContentLoaded', async () => {
+        await checkAuthStatus();
+        await startOnboarding();
+        checkVoiceStatus();
+        
+        // Language selector change handler
+        document.getElementById('language-selector').addEventListener('change', (e) => {
+            selectedLanguage = e.target.value;
+        });
+    });
+    
+    async function checkAuthStatus() {
+        try {
+            const response = await fetch('/api/auth/status');
+            const data = await response.json();
+            
+            if (!data.authenticated) {
+                window.location.href = '/login';
+            }
+        } catch (error) {
+            console.error('Auth check failed:', error);
+            window.location.href = '/login';
+        }
+    }
+    
+    async function startOnboarding() {
+        try {
+            const response = await fetch('/api/onboarding/start', {
+                method: 'POST'
+            });
+            
+            const data = await response.json();
+            
+            if (data.completed) {
+                // Already completed, redirect
+                window.location.href = '/';
+                return;
+            }
+            
+            if (data.message) {
+                addMessage('assistant', data.message);
+            }
+            
+            if (data.onboarding_state) {
+                onboardingState = data.onboarding_state;
+            }
+            
+            if (data.step) {
+                currentStep = data.step;
+                updateProgress(data.step);
+            }
+            
+        } catch (error) {
+            console.error('Failed to start onboarding:', error);
+        }
+    }
+    
+    function updateProgress(step) {
+        const stepMap = {
+            'welcome': 1,
+            'basic_info': 2,
+            'health_metrics': 3,
+            'goals': 4,
+            'confirmation': 5
+        };
+        
+        const currentStepNum = stepMap[step] || 1;
+        const totalSteps = 5;
+        const percentage = (currentStepNum / totalSteps) * 100;
+        
+        document.getElementById('progress-fill').style.width = percentage + '%';
+        document.getElementById('progress-text').textContent = `Step ${currentStepNum} of ${totalSteps}`;
+    }
+    
+    function handleKeyPress(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    }
+    
+    async function sendMessage() {
+        if (isProcessing) return;
+        
+        const input = document.getElementById('chat-input');
+        const message = input.value.trim();
+        
+        if (!message) return;
+        
+        // Add user message to chat
+        addMessage('user', message);
+        input.value = '';
+        
+        // Show typing indicator
+        isProcessing = true;
+        const sendBtn = document.getElementById('send-btn');
+        sendBtn.disabled = true;
+        sendBtn.textContent = '...';
+        
+        try {
+            const response = await fetch('/api/onboarding/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            });
+            
+            const data = await response.json();
+            
+            console.log('Onboarding response:', data); // Debug
+            
+            if (data.error) {
+                addMessage('assistant', `Error: ${data.error}`);
+            } else {
+                addMessage('assistant', data.response);
+                
+                // Update state
+                if (data.onboarding_state) {
+                    onboardingState = data.onboarding_state;
+                    console.log('Updated onboarding state:', onboardingState); // Debug
+                }
+                
+                // Update step and progress
+                if (data.step) {
+                    currentStep = data.step;
+                    updateProgress(data.step);
+                }
+                
+                // Check if completed - only trust the server's completion flag
+                // Don't use fallback text detection here since server handles it more carefully
+                if (data.completed) {
+                    console.log('Onboarding completed!', { 
+                        completed: data.completed, 
+                        state: data.onboarding_state,
+                        step: data.step
+                    }); // Debug
+                    // Update progress to 100% (confirmation step)
+                    updateProgress('confirmation');
+                    // Show completion message and complete onboarding
+                    setTimeout(() => {
+                        completeOnboarding();
+                    }, 1000);
+                }
+            }
+            
+        } catch (error) {
+            console.error('Onboarding chat error:', error);
+            addMessage('assistant', 'Sorry, I encountered an error. Please try again.');
+            console.error('Full error:', error);
+        } finally {
+            isProcessing = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+        }
+    }
+    
+    async function completeOnboarding() {
+        try {
+            const response = await fetch('/api/onboarding/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ final_data: onboardingState })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                addMessage('assistant', 'Perfect! Your profile has been created. Redirecting you to the dashboard...');
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 2000);
+            } else {
+                addMessage('assistant', 'There was an error completing your setup. Please try again.');
+            }
+            
+        } catch (error) {
+            console.error('Complete onboarding error:', error);
+            addMessage('assistant', 'Error completing setup. Please refresh and try again.');
+        }
+    }
+    
+    function addMessage(role, content) {
+        const chatBox = document.getElementById('chat-box');
+        const div = document.createElement('div');
+        div.className = `message ${role}`;
+        
+        if (role === 'assistant') {
+            div.innerHTML = `<div class="agent-badge">[ONBOARDING]</div><p>${content}</p>`;
+        } else {
+            div.innerHTML = `<p>${content}</p>`;
+        }
+        
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+    
+    // Voice recording functions (same as chat.html)
+    async function checkVoiceStatus() {
+        try {
+            const response = await fetch('/api/voice/status');
+            const data = await response.json();
+            
+            const micBtn = document.getElementById('mic-btn');
+            if (!data.stt_available) {
+                micBtn.disabled = true;
+                micBtn.title = 'Voice input not available (Whisper not loaded)';
+            }
+        } catch (error) {
+            console.error('Failed to check voice status:', error);
+        }
+    }
+    
+    async function toggleRecording() {
+        if (isRecording) {
+            stopRecording();
+        } else {
+            startRecording();
+        }
+    }
+    
+    async function startRecording() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 16000,
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            });
+            
+            let mimeType = 'audio/webm';
+            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                mimeType = 'audio/webm;codecs=opus';
+            } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+                mimeType = 'audio/webm';
+            } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                mimeType = 'audio/mp4';
+            }
+            
+            mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+            audioChunks = [];
+            
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+            };
+            
+            mediaRecorder.onstop = async () => {
+                const audioBlob = await convertToWAV(audioChunks);
+                await transcribeAndSend(audioBlob);
+                stream.getTracks().forEach(track => track.stop());
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            
+            const micBtn = document.getElementById('mic-btn');
+            const micIcon = document.getElementById('mic-icon');
+            micBtn.classList.add('recording');
+            micIcon.textContent = '⏹️';
+            micBtn.title = 'Click to stop recording';
+            
+        } catch (error) {
+            console.error('Error starting recording:', error);
+            alert('Could not access microphone. Please check permissions.');
+        }
+    }
+    
+    function stopRecording() {
+        if (mediaRecorder && isRecording) {
+            mediaRecorder.stop();
+            isRecording = false;
+            
+            const micBtn = document.getElementById('mic-btn');
+            const micIcon = document.getElementById('mic-icon');
+            micBtn.classList.remove('recording');
+            micIcon.textContent = '🎤';
+            micBtn.title = 'Click to record voice message';
+        }
+    }
+    
+    async function convertToWAV(audioChunks) {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        
+        const wav = audioBufferToWav(audioBuffer);
+        return new Blob([wav], { type: 'audio/wav' });
+    }
+    
+    function audioBufferToWav(buffer) {
+        const numChannels = buffer.numberOfChannels;
+        const sampleRate = buffer.sampleRate;
+        const format = 1;
+        const bitDepth = 16;
+        const bytesPerSample = bitDepth / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const length = buffer.length * numChannels * bytesPerSample;
+        const arrayBuffer = new ArrayBuffer(44 + length);
+        const view = new DataView(arrayBuffer);
+        
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+        
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + length, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, format, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * blockAlign, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitDepth, true);
+        writeString(36, 'data');
+        view.setUint32(40, length, true);
+        
+        let offset = 44;
+        for (let i = 0; i < buffer.length; i++) {
+            for (let channel = 0; channel < numChannels; channel++) {
+                const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+                view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+                offset += 2;
+            }
+        }
+        
+        return arrayBuffer;
+    }
+    
+    async function transcribeAndSend(audioBlob) {
+        try {
+            const input = document.getElementById('chat-input');
+            input.value = 'Transcribing...';
+            input.disabled = true;
+            
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.wav');
+            if (selectedLanguage !== 'en') {
+                formData.append('language', selectedLanguage);
+            }
+            
+            const response = await fetch('/api/voice/transcribe', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            
+            input.value = data.text;
+            input.disabled = false;
+            sendMessage();
+            
+        } catch (error) {
+            console.error('Transcription error:', error);
+            alert('Failed to transcribe audio: ' + error.message);
+            
+            const input = document.getElementById('chat-input');
+            input.value = '';
+            input.disabled = false;
+        }
+    }
+</script>
+
+<style>
+.onboarding-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.onboarding-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.onboarding-header h1 {
+    margin-bottom: 0.5rem;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: var(--gray-200);
+    border-radius: 4px;
+    margin: 1rem 0;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.3s ease;
+    width: 20%;
+}
+
+.progress-text {
+    color: var(--gray-600);
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+}
+
+.chat-box {
+    height: 400px;
+    overflow-y: auto;
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+</style>
+{% endblock %}
+

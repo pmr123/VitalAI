@@ -1,0 +1,811 @@
+{% extends "base.html" %}
+
+{% block title %}Chat - VitalAI{% endblock %}
+
+{% block content %}
+<div class="chat-container">
+    <!-- Notification Banner -->
+    <div id="notification-banner" class="notification-banner" style="display: none;">
+        <div class="notification-content">
+            <span class="notification-icon">[!]</span>
+            <span id="notification-text"></span>
+        </div>
+        <button onclick="dismissNotification()" class="notification-dismiss">✕</button>
+    </div>
+    
+    <div class="chat-header">
+        <h1>Health Assistant</h1>
+        <div class="chat-status" id="chat-status">
+            <span class="status-dot"></span>
+            <span class="status-text">Checking connection...</span>
+        </div>
+    </div>
+    
+    <!-- Agent selector bar -->
+    <div class="agent-bar">
+        <span class="agent-bar-label">Mode:</span>
+        <select id="agent-mode" onchange="updateAgentMode()">
+            <option value="auto">Auto (Supervisor routes)</option>
+            <option value="health_analyst">Health Analyst</option>
+            <option value="medication_manager">Medication Manager</option>
+            <option value="knowledge_expert">Knowledge Expert</option>
+            <option value="digital_clone">Digital Clone</option>
+        </select>
+        <button onclick="clearChat()" class="btn-small">Clear Chat</button>
+    </div>
+    
+    <div class="chat-box" id="chat-box">
+        <div class="message assistant">
+            <div class="agent-badge">[SUPERVISOR]</div>
+            <p>Hello! I'm your VitalAI health assistant powered by a <strong>multi-agent system</strong>.</p>
+            <p>I have specialized agents ready to help:</p>
+            <ul>
+                <li><strong>Health Analyst</strong> - Your health data, scores, and trends</li>
+                <li><strong>Medication Manager</strong> - Medications and reminders</li>
+                <li><strong>Knowledge Expert</strong> - Medical information and guidelines</li>
+                <li><strong>Digital Clone</strong> - Personalized advice based on your patterns</li>
+            </ul>
+            <p>What would you like to know?</p>
+        </div>
+    </div>
+    
+    <div class="chat-input-container">
+        <div class="input-controls">
+            <select id="language-selector" class="language-selector" title="Select language">
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="hi">Hindi</option>
+                <option value="zh">Chinese</option>
+                <option value="ar">Arabic</option>
+                <option value="pt">Portuguese</option>
+                <option value="fr">French</option>
+            </select>
+            <button 
+                id="mic-btn" 
+                class="btn-icon" 
+                onclick="toggleRecording()" 
+                title="Record voice message"
+            >
+                <span id="mic-icon">🎤</span>
+            </button>
+        </div>
+        <input 
+            type="text" 
+            id="chat-input" 
+            placeholder="Ask about your health... (or click mic to speak)"
+            onkeypress="handleKeyPress(event)"
+        >
+        <button onclick="sendMessage()" class="btn btn-primary" id="send-btn">Send</button>
+    </div>
+    
+    <div class="chat-info">
+        <details>
+            <summary>Example questions to try</summary>
+            <ul>
+                <li>[HEALTH] "What are my current health scores?"</li>
+                <li>[HEALTH] "Show me my heart rate from the past week"</li>
+                <li>[MEDS] "Add aspirin 100mg to my medications"</li>
+                <li>[MEDS] "Set a reminder for vitamins at 8:00 AM"</li>
+                <li>[KNOWLEDGE] "What is HRV and why does it matter?"</li>
+                <li>[KNOWLEDGE] "What are the sleep stages and how do they affect sleep?"</li>
+                <li>[CLONE] "Based on my patterns, what should I focus on?"</li>
+            </ul>
+        </details>
+        
+        <div id="sources-section" class="sources-section" style="display: none;">
+            <h4>Sources Used</h4>
+            <ul id="sources-list"></ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let USER_ID = null;  // Will be set from session
+    let chatHistory = [];
+    let isProcessing = false;
+    let currentNotificationId = null;
+    let selectedAgent = 'auto';
+    
+    // Voice recording state
+    let isRecording = false;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let selectedLanguage = 'en';
+    
+    // Agent label map
+    const agentLabels = {
+        'supervisor': '[SUPERVISOR]',
+        'health_analyst': '[HEALTH]',
+        'medication_manager': '[MEDS]',
+        'knowledge_expert': '[KNOWLEDGE]',
+        'digital_clone': '[CLONE]'
+    };
+    
+    const agentNames = {
+        'supervisor': 'Supervisor',
+        'health_analyst': 'Health Analyst',
+        'medication_manager': 'Medication Manager',
+        'knowledge_expert': 'Knowledge Expert',
+        'digital_clone': 'Digital Clone'
+    };
+    
+    // Check connection on load and start notification polling
+    document.addEventListener('DOMContentLoaded', async () => {
+        // Get user ID from session
+        await checkAuthAndGetUserId();
+        
+        checkConnection();
+        checkAgents();
+        checkVoiceStatus();
+        checkNotifications();  // Check immediately
+        setInterval(checkNotifications, 5000);  // Then every 5 seconds (more frequent for testing)
+        
+        // Language selector change handler
+        document.getElementById('language-selector').addEventListener('change', (e) => {
+            selectedLanguage = e.target.value;
+        });
+    });
+    
+    async function checkAuthAndGetUserId() {
+        try {
+            const response = await fetch('/api/auth/status');
+            const data = await response.json();
+            
+            if (!data.authenticated) {
+                window.location.href = '/login';
+                return;
+            }
+            
+            USER_ID = data.user_id;
+            
+            // Check if onboarding is needed
+            if (!data.onboarding_completed) {
+                window.location.href = '/onboarding';
+                return;
+            }
+            
+        } catch (error) {
+            console.error('Auth check failed:', error);
+            window.location.href = '/login';
+        }
+    }
+    
+    // Check voice service status on load
+    async function checkVoiceStatus() {
+        try {
+            const response = await fetch('/api/voice/status');
+            const data = await response.json();
+            
+            const micBtn = document.getElementById('mic-btn');
+            if (!data.stt_available) {
+                micBtn.disabled = true;
+                micBtn.title = 'Voice input not available (Whisper not loaded)';
+            }
+        } catch (error) {
+            console.error('Failed to check voice status:', error);
+        }
+    }
+    
+    // Voice recording functions
+    async function toggleRecording() {
+        if (isRecording) {
+            stopRecording();
+        } else {
+            startRecording();
+        }
+    }
+    
+    async function startRecording() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 16000,  // Whisper works best with 16kHz
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            });
+            
+            // Try to use WAV format if available, otherwise fall back to default
+            let mimeType = 'audio/webm';
+            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                mimeType = 'audio/webm;codecs=opus';
+            } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+                mimeType = 'audio/webm';
+            } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                mimeType = 'audio/mp4';
+            }
+            
+            mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+            audioChunks = [];
+            
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+            };
+            
+            mediaRecorder.onstop = async () => {
+                // Convert audio chunks to WAV format using Web Audio API
+                const audioBlob = await convertToWAV(audioChunks);
+                await transcribeAndSend(audioBlob);
+                
+                // Stop all tracks
+                stream.getTracks().forEach(track => track.stop());
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            
+            // Update UI
+            const micBtn = document.getElementById('mic-btn');
+            const micIcon = document.getElementById('mic-icon');
+            micBtn.classList.add('recording');
+            micIcon.textContent = '⏹️';
+            micBtn.title = 'Click to stop recording';
+            
+        } catch (error) {
+            console.error('Error starting recording:', error);
+            alert('Could not access microphone. Please check permissions.');
+        }
+    }
+    
+    function stopRecording() {
+        if (mediaRecorder && isRecording) {
+            mediaRecorder.stop();
+            isRecording = false;
+            
+            // Update UI
+            const micBtn = document.getElementById('mic-btn');
+            const micIcon = document.getElementById('mic-icon');
+            micBtn.classList.remove('recording');
+            micIcon.textContent = '🎤';
+            micBtn.title = 'Click to record voice message';
+        }
+    }
+    
+    // Convert audio chunks to WAV format
+    async function convertToWAV(audioChunks) {
+        // Combine all chunks into a single blob
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        
+        // Use Web Audio API to convert to WAV
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        
+        // Convert to WAV
+        const wav = audioBufferToWav(audioBuffer);
+        return new Blob([wav], { type: 'audio/wav' });
+    }
+    
+    // Convert AudioBuffer to WAV format
+    function audioBufferToWav(buffer) {
+        const numChannels = buffer.numberOfChannels;
+        const sampleRate = buffer.sampleRate;
+        const format = 1; // PCM
+        const bitDepth = 16;
+        
+        const bytesPerSample = bitDepth / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        
+        const length = buffer.length * numChannels * bytesPerSample;
+        const arrayBuffer = new ArrayBuffer(44 + length);
+        const view = new DataView(arrayBuffer);
+        
+        // WAV header
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+        
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + length, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, format, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * blockAlign, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitDepth, true);
+        writeString(36, 'data');
+        view.setUint32(40, length, true);
+        
+        // Convert audio data
+        let offset = 44;
+        for (let i = 0; i < buffer.length; i++) {
+            for (let channel = 0; channel < numChannels; channel++) {
+                const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+                view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+                offset += 2;
+            }
+        }
+        
+        return arrayBuffer;
+    }
+    
+    async function transcribeAndSend(audioBlob) {
+        try {
+            // Show processing indicator
+            const input = document.getElementById('chat-input');
+            input.value = 'Transcribing...';
+            input.disabled = true;
+            
+            // Send audio to transcription endpoint
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.wav');
+            if (selectedLanguage !== 'en') {
+                formData.append('language', selectedLanguage);
+            }
+            
+            const response = await fetch('/api/voice/transcribe', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            
+            // Set transcribed text in input
+            input.value = data.text;
+            input.disabled = false;
+            
+            // Auto-send the message
+            sendMessage();
+            
+        } catch (error) {
+            console.error('Transcription error:', error);
+            alert('Failed to transcribe audio: ' + error.message);
+            
+            const input = document.getElementById('chat-input');
+            input.value = '';
+            input.disabled = false;
+        }
+    }
+    
+    // Function to play TTS audio for assistant responses using Web Speech API
+    async function playTTS(text, language = 'en') {
+        try {
+            // Check if Web Speech API is available
+            if (!('speechSynthesis' in window)) {
+                console.warn('Web Speech API not available - TTS disabled');
+                return;
+            }
+            
+            // Translate text if needed
+            let textToSpeak = text;
+            if (language !== 'en') {
+                try {
+                    const translateResponse = await fetch('/api/translate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            text: text,
+                            source_lang: 'en',
+                            target_lang: language
+                        })
+                    });
+                    
+                    const translateData = await translateResponse.json();
+                    if (translateData.success) {
+                        textToSpeak = translateData.translated_text;
+                    }
+                } catch (translateError) {
+                    console.warn('Translation failed, using original text:', translateError);
+                    // Continue with original text if translation fails
+                }
+            }
+            
+            // Use Web Speech API for TTS (browser-based, no server required)
+            const utterance = new SpeechSynthesisUtterance(textToSpeak);
+            
+            // Map language codes to Web Speech API language codes
+            const langMap = {
+                'en': 'en-US',
+                'es': 'es-ES',
+                'hi': 'hi-IN',
+                'zh': 'zh-CN',
+                'ar': 'ar-SA',
+                'pt': 'pt-BR',
+                'fr': 'fr-FR'
+            };
+            
+            utterance.lang = langMap[language] || 'en-US';
+            utterance.rate = 1.0;  // Normal speed
+            utterance.pitch = 1.0; // Normal pitch
+            utterance.volume = 1.0; // Full volume
+            
+            // Cancel any ongoing speech before starting new one
+            window.speechSynthesis.cancel();
+            
+            // Speak the text
+            window.speechSynthesis.speak(utterance);
+            
+            // Optional: Log when speech starts/ends
+            utterance.onstart = () => console.log('TTS started');
+            utterance.onend = () => console.log('TTS ended');
+            utterance.onerror = (event) => console.warn('TTS error:', event.error);
+            
+        } catch (error) {
+            console.error('TTS error:', error);
+            // Fail silently - TTS is optional
+        }
+    }
+    
+    function updateAgentMode() {
+        selectedAgent = document.getElementById('agent-mode').value;
+        console.log('Agent mode changed to:', selectedAgent);
+    }
+    
+    async function checkAgents() {
+        try {
+            const response = await fetch('/api/agents');
+            const data = await response.json();
+            console.log('Available agents:', data.agents);
+        } catch (error) {
+            console.error('Agent check failed:', error);
+        }
+    }
+    
+    async function checkNotifications() {
+        try {
+            const response = await fetch(`/api/notifications?user_id=${USER_ID}`);
+            const data = await response.json();
+            
+            if (data.notifications && data.notifications.length > 0) {
+                // Show the most recent unacknowledged notification
+                const notification = data.notifications.find(n => !n.acknowledged);
+                if (notification) {
+                    showNotification(notification);
+                }
+            }
+        } catch (error) {
+            console.error('Notification check failed:', error);
+        }
+    }
+    
+    function showNotification(notification) {
+        const banner = document.getElementById('notification-banner');
+        const text = document.getElementById('notification-text');
+        
+        currentNotificationId = notification.id;
+        text.innerHTML = `<strong>${notification.title}</strong> - ${notification.message}`;
+        banner.style.display = 'flex';
+        
+        // Also add to chat
+        addMessage('assistant', `<strong>REMINDER:</strong> ${notification.message}`, null, 'medication_manager');
+        
+        // Play a sound (optional - browsers may block this)
+        try {
+            const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
+            audio.volume = 0.3;
+            audio.play().catch(() => {});  // Ignore if blocked
+        } catch(e) {}
+    }
+    
+    async function dismissNotification() {
+        if (currentNotificationId) {
+            try {
+                await fetch(`/api/notifications/${currentNotificationId}/acknowledge`, {
+                    method: 'POST'
+                });
+            } catch (error) {
+                console.error('Failed to acknowledge:', error);
+            }
+        }
+        
+        document.getElementById('notification-banner').style.display = 'none';
+        currentNotificationId = null;
+    }
+    
+    async function checkConnection() {
+        const statusDot = document.querySelector('.status-dot');
+        const statusText = document.querySelector('.status-text');
+        
+        try {
+            const response = await fetch('/api/rag/status');
+            const data = await response.json();
+            
+            const ragReady = data.rag.total_chunks > 0;
+            const llmReady = data.llm.status === 'connected' && data.llm.model_available;
+            
+            if (ragReady && llmReady) {
+                statusDot.classList.add('connected');
+                statusText.textContent = `Connected (${data.rag.total_chunks} KB chunks, 5 agents)`;
+            } else if (!llmReady) {
+                statusDot.classList.add('error');
+                statusText.textContent = 'Ollama not connected - check if running';
+                addMessage('assistant', `⚠️ Cannot connect to Ollama. Make sure it's running:\n\`ollama serve\`\n\nModel needed: ${data.llm.configured_model}`, null, 'supervisor');
+            } else if (!ragReady) {
+                statusDot.classList.add('warning');
+                statusText.textContent = 'Knowledge base empty - loading...';
+                await reloadKnowledgeBase();
+            }
+        } catch (error) {
+            statusDot.classList.add('error');
+            statusText.textContent = 'Connection error';
+            console.error('Status check failed:', error);
+        }
+    }
+    
+    async function reloadKnowledgeBase() {
+        try {
+            const response = await fetch('/api/rag/reload', { method: 'POST' });
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                document.querySelector('.status-dot').className = 'status-dot connected';
+                document.querySelector('.status-text').textContent = `Connected (${data.chunks_loaded} chunks)`;
+            }
+        } catch (error) {
+            console.error('Failed to reload KB:', error);
+        }
+    }
+    
+    function handleKeyPress(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    }
+    
+    async function sendMessage() {
+        if (isProcessing) return;
+        
+        const input = document.getElementById('chat-input');
+        const message = input.value.trim();
+        
+        if (!message) return;
+        
+        // Add user message to chat
+        addMessage('user', message);
+        input.value = '';
+        
+        // Add to history
+        chatHistory.push({ role: 'user', content: message });
+        
+        // Show typing indicator
+        isProcessing = true;
+        const sendBtn = document.getElementById('send-btn');
+        sendBtn.disabled = true;
+        sendBtn.textContent = '...';
+        
+        // Step 1: Show routing indicator
+        const routingDiv = document.createElement('div');
+        routingDiv.className = 'message assistant typing-indicator routing-step';
+        routingDiv.innerHTML = '<div class="agent-badge">[ROUTING...]</div><span class="typing">Finding the right agent...</span>';
+        const chatBox = document.getElementById('chat-box');
+        chatBox.appendChild(routingDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        
+        try {
+            // Build request - use agent API if auto mode, otherwise force specific agent
+            const endpoint = '/api/agents/chat';
+            const body = {
+                user_id: USER_ID,
+                message: message,
+                history: chatHistory.slice(-6)
+            };
+            
+            // If not auto mode, force the selected agent
+            if (selectedAgent !== 'auto') {
+                body.agent = selectedAgent;
+            }
+            
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            
+            const data = await response.json();
+            
+            // Step 2: Update routing indicator to show which agent was selected
+            const agentType = data.agent || 'supervisor';
+            const agentLabel = agentLabels[agentType] || '[AGENT]';
+            const agentName = agentNames[agentType] || agentType;
+            
+            // Remove routing indicator and show thinking step
+            routingDiv.remove();
+            
+            // Step 3: Show thinking indicator
+            const thinkingDiv = document.createElement('div');
+            thinkingDiv.className = 'message assistant typing-indicator thinking-step';
+            thinkingDiv.innerHTML = `<div class="agent-badge">${agentLabel} ${agentName}</div><span class="typing">Thinking...</span>`;
+            chatBox.appendChild(thinkingDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            
+            // Small delay to show thinking state
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // Remove thinking indicator
+            thinkingDiv.remove();
+            
+            if (data.error) {
+                addMessage('assistant', `Error: ${data.error}`, null, 'supervisor');
+            } else {
+                // Step 4: Add assistant response with agent info
+                // Store original text for TTS (before formatting)
+                addMessage('assistant', formatResponse(data.response), data.tool_used, agentType, data.response);
+                chatHistory.push({ role: 'assistant', content: data.response, agent: agentType });
+                
+                // Show sources ONLY if available and from knowledge expert
+                if (data.sources && data.sources.length > 0 && agentType === 'knowledge_expert') {
+                    showSources(data.sources);
+                } else {
+                    // Hide sources section if not relevant
+                    hideSources();
+                }
+                
+                // Log routing info if available
+                if (data.routing) {
+                    console.log('Routing:', data.routing);
+                }
+                
+                // Log tool usage for debugging
+                if (data.tool_used) {
+                    console.log('[DEBUG] Tool used:', data.tool_used);
+                    console.log('[DEBUG] Full response data:', data);
+                } else {
+                    console.log('[DEBUG] No tool was used for this response');
+                }
+            }
+        } catch (error) {
+            // Remove any typing indicators on error
+            const typingIndicators = document.querySelectorAll('.typing-indicator');
+            typingIndicators.forEach(ind => ind.remove());
+            
+            addMessage('assistant', 'Sorry, I encountered an error. Please check if Ollama is running.', null, 'supervisor');
+            console.error('Chat error:', error);
+        } finally {
+            isProcessing = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+        }
+    }
+    
+    function addMessage(role, content, toolUsed = null, agentType = null, originalText = null) {
+        const chatBox = document.getElementById('chat-box');
+        const div = document.createElement('div');
+        const id = 'msg-' + Date.now();
+        div.id = id;
+        div.className = `message ${role}`;
+        
+        // Store original text for TTS (for assistant messages)
+        if (role === 'assistant' && originalText) {
+            div.setAttribute('data-tts-text', originalText);
+        }
+        
+        let html = '';
+        
+        // Add agent badge for assistant messages
+        if (role === 'assistant' && agentType) {
+            const label = agentLabels[agentType] || '[AGENT]';
+            const name = agentNames[agentType] || agentType;
+            html += `<div class="agent-badge">${label} ${name}</div>`;
+        }
+        
+        // Add tool badge if used
+        if (toolUsed) {
+            html += `<div class="tool-badge">TOOL: ${toolUsed}</div>`;
+        }
+        
+        html += content;
+        
+        // Add TTS button for assistant messages
+        if (role === 'assistant' && originalText) {
+            html += `<button class="tts-btn" title="Play audio">🔊</button>`;
+        }
+        
+        div.innerHTML = html;
+        
+        // Attach event listener after creating the element
+        if (role === 'assistant' && originalText) {
+            const ttsBtn = div.querySelector('.tts-btn');
+            if (ttsBtn) {
+                ttsBtn.addEventListener('click', () => playTTSForMessage(id));
+            }
+        }
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        return id;
+    }
+    
+    // Function to play TTS for a specific message
+    async function playTTSForMessage(messageId) {
+        const messageDiv = document.getElementById(messageId);
+        if (!messageDiv) return;
+        
+        const textToSpeak = messageDiv.getAttribute('data-tts-text');
+        if (!textToSpeak) return;
+        
+        // Get the button and update its state
+        const btn = messageDiv.querySelector('.tts-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '🔊';
+            btn.classList.add('playing');
+        }
+        
+        // Play TTS
+        await playTTS(textToSpeak, selectedLanguage);
+        
+        // Re-enable button after a short delay
+        setTimeout(() => {
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('playing');
+            }
+        }, 1000);
+    }
+    
+    function removeMessage(id) {
+        const msg = document.getElementById(id);
+        if (msg) msg.remove();
+    }
+    
+    function formatResponse(text) {
+        // Convert markdown-like formatting to HTML
+        return text
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/\n/g, '<br>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`(.*?)`/g, '<code>$1</code>')
+            .replace(/^/, '<p>')
+            .replace(/$/, '</p>');
+    }
+    
+    function showSources(sources) {
+        const section = document.getElementById('sources-section');
+        const list = document.getElementById('sources-list');
+        
+        if (!sources || sources.length === 0) {
+            hideSources();
+            return;
+        }
+        
+        list.innerHTML = sources.map(s => 
+            `<li><strong>${s.title}</strong> <span class="relevance">(${Math.round(s.relevance * 100)}% relevant)</span></li>`
+        ).join('');
+        
+        section.style.display = 'block';
+    }
+    
+    function hideSources() {
+        const section = document.getElementById('sources-section');
+        section.style.display = 'none';
+    }
+    
+    async function clearChat() {
+        chatHistory = [];
+        
+        // Also clear server-side history
+        try {
+            await fetch('/api/agents/history/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: USER_ID })
+            });
+        } catch (error) {
+            console.error('Failed to clear server history:', error);
+        }
+        
+        document.getElementById('chat-box').innerHTML = `
+            <div class="message assistant">
+                <div class="agent-badge">[SUPERVISOR]</div>
+                <p>Chat cleared. How can I help you?</p>
+            </div>
+        `;
+        hideSources();
+    }
+</script>
+{% endblock %}

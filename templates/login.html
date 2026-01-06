@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}Login - VitalAI{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-box">
+        <h1>Welcome to VitalAI</h1>
+        <p class="login-subtitle">Your AI-powered health assistant</p>
+        
+        <form id="login-form" onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    name="email" 
+                    required 
+                    placeholder="your.email@example.com"
+                    autocomplete="email"
+                >
+            </div>
+            
+            <div class="form-group">
+                <label for="name">Name (Optional)</label>
+                <input 
+                    type="text" 
+                    id="name" 
+                    name="name" 
+                    placeholder="Your name"
+                    autocomplete="name"
+                >
+                <small>If you're new, we'll use this as your name. Otherwise, we'll find your existing account.</small>
+            </div>
+            
+            <button type="submit" class="btn btn-primary btn-block" id="login-btn">
+                Continue
+            </button>
+        </form>
+        
+        <div id="login-error" class="error-message" style="display: none;"></div>
+    </div>
+</div>
+
+<style>
+.login-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: calc(100vh - 200px);
+    padding: 2rem;
+}
+
+.login-box {
+    background: white;
+    padding: 2.5rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 400px;
+}
+
+.login-box h1 {
+    text-align: center;
+    margin-bottom: 0.5rem;
+    color: var(--gray-800);
+}
+
+.login-subtitle {
+    text-align: center;
+    color: var(--gray-600);
+    margin-bottom: 2rem;
+}
+
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: var(--gray-800);
+}
+
+.form-group input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid var(--gray-200);
+    border-radius: 6px;
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 0.25rem;
+    color: var(--gray-600);
+    font-size: 0.875rem;
+}
+
+.btn-block {
+    width: 100%;
+    padding: 0.75rem;
+    font-size: 1rem;
+}
+
+.error-message {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background: #fee2e2;
+    color: #dc2626;
+    border-radius: 6px;
+    text-align: center;
+}
+</style>
+
+<script>
+async function handleLogin(event) {
+    event.preventDefault();
+    
+    const email = document.getElementById('email').value.trim();
+    const name = document.getElementById('name').value.trim();
+    const loginBtn = document.getElementById('login-btn');
+    const errorDiv = document.getElementById('login-error');
+    
+    if (!email) {
+        showError('Email is required');
+        return;
+    }
+    
+    // Disable button
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Logging in...';
+    errorDiv.style.display = 'none';
+    
+    try {
+        const response = await fetch('/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ email, name })
+        });
+        
+        const data = await response.json();
+        
+        if (data.error) {
+            showError(data.error);
+            loginBtn.disabled = false;
+            loginBtn.textContent = 'Continue';
+            return;
+        }
+        
+        // Success - redirect
+        if (data.onboarding_completed) {
+            window.location.href = '/';
+        } else {
+            window.location.href = '/onboarding';
+        }
+        
+    } catch (error) {
+        showError('Login failed. Please try again.');
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Continue';
+        console.error('Login error:', error);
+    }
+}
+
+function showError(message) {
+    const errorDiv = document.getElementById('login-error');
+    errorDiv.textContent = message;
+    errorDiv.style.display = 'block';
+}
+</script>
+{% endblock %}
+

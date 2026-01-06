@@ -1,0 +1,5 @@
+# This directory stores:
+# - SQLite database (vitalai.db)
+# - ChromaDB vector store (vectordb/)
+# These files are in .gitignore
+

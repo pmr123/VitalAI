@@ -1,0 +1,352 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - VitalAI{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h1>Health Dashboard</h1>
+    
+    <!-- Health Scores Section -->
+    <section class="scores-section">
+        <h2>Your Health Scores</h2>
+        <div id="health-scores" class="scores-grid">
+            <div class="score-card loading">Loading...</div>
+        </div>
+    </section>
+    
+    <!-- Quick Actions -->
+    <section class="actions-section">
+        <h2>Quick Actions</h2>
+        <div class="action-buttons">
+            <button onclick="simulateData()" class="btn btn-primary">
+                Generate Test Data (7 days)
+            </button>
+            <button onclick="refreshScores()" class="btn btn-secondary">
+                Refresh Scores
+            </button>
+        </div>
+        <div id="action-status"></div>
+    </section>
+    
+    <!-- User Info Section -->
+    <section class="user-section" id="user-section" style="display: none;">
+        <h2>User Profile</h2>
+        <div id="user-info"></div>
+    </section>
+    
+    <!-- Recent Data Section -->
+    <section class="data-section">
+        <h2>Health Data</h2>
+        
+        <!-- Filters -->
+        <div class="data-filters">
+            <label>
+                Metric:
+                <select id="metric-filter" onchange="loadRecentData()">
+                    <option value="">All Metrics</option>
+                    <option value="heart_rate">Heart Rate</option>
+                    <option value="resting_hr">Resting HR</option>
+                    <option value="hrv">HRV</option>
+                    <option value="steps">Steps</option>
+                    <option value="sleep_duration">Sleep Duration</option>
+                    <option value="sleep_deep">Deep Sleep</option>
+                    <option value="sleep_score">Sleep Score</option>
+                    <option value="calories">Calories</option>
+                </select>
+            </label>
+            <label>
+                View:
+                <select id="view-mode" onchange="loadRecentData()">
+                    <option value="latest">Latest Per Metric</option>
+                    <option value="history">Full History</option>
+                </select>
+            </label>
+            <label>
+                Days:
+                <select id="days-filter" onchange="loadRecentData()">
+                    <option value="1">1 Day</option>
+                    <option value="3">3 Days</option>
+                    <option value="7" selected>7 Days</option>
+                    <option value="14">14 Days</option>
+                </select>
+            </label>
+        </div>
+        
+        <div id="recent-data" class="data-table-container">
+            <p>Click "Generate Test Data" to populate sample data.</p>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let USER_ID = null;  // Will be set from session
+    
+    // Load health scores on page load
+    document.addEventListener('DOMContentLoaded', async function() {
+        // Get user ID from session
+        await checkAuthAndGetUserId();
+        
+        loadUserInfo();
+        refreshScores();
+        loadRecentData();
+    });
+    
+    async function checkAuthAndGetUserId() {
+        try {
+            const response = await fetch('/api/auth/status');
+            const data = await response.json();
+            
+            if (!data.authenticated) {
+                window.location.href = '/login';
+                return;
+            }
+            
+            USER_ID = data.user_id;
+            
+            // Check if onboarding is needed
+            if (!data.onboarding_completed) {
+                window.location.href = '/onboarding';
+                return;
+            }
+            
+        } catch (error) {
+            console.error('Auth check failed:', error);
+            window.location.href = '/login';
+        }
+    }
+    
+    async function loadUserInfo() {
+        try {
+            const response = await fetch(`/api/user/${USER_ID}`);
+            if (response.ok) {
+                const user = await response.json();
+                document.getElementById('user-section').style.display = 'block';
+                document.getElementById('user-info').innerHTML = `
+                    <p><strong>${user.name}</strong> | Age: ${user.age || 'N/A'} | 
+                    BMI: ${user.height_cm && user.weight_kg ? 
+                        (user.weight_kg / ((user.height_cm/100) ** 2)).toFixed(1) : 'N/A'} |
+                    Step Goal: ${user.daily_step_goal?.toLocaleString() || '10,000'}</p>
+                `;
+            }
+        } catch (error) {
+            console.log('User not found yet');
+        }
+    }
+    
+    async function refreshScores() {
+        const container = document.getElementById('health-scores');
+        container.innerHTML = '<div class="score-card loading">Loading...</div>';
+        
+        try {
+            const response = await fetch(`/api/user/${USER_ID}/health-summary`);
+            const data = await response.json();
+            
+            if (data.scores) {
+                container.innerHTML = renderScores(data);
+            } else {
+                container.innerHTML = '<p>No health data available. Generate test data first.</p>';
+            }
+        } catch (error) {
+            container.innerHTML = '<p class="error">Error loading scores. Make sure you have generated data.</p>';
+        }
+    }
+    
+    function renderScores(data) {
+        const scores = data.scores;
+        const getClass = (score) => {
+            if (score === null) return 'na';
+            if (score >= 80) return 'excellent';
+            if (score >= 60) return 'good';
+            if (score >= 40) return 'fair';
+            return 'poor';
+        };
+        
+        const formatScore = (score) => score !== null ? score : 'N/A';
+        
+        let html = `
+            <div class="score-card cmi ${getClass(scores.cmi)}">
+                <div class="score-label">Cardio-Metabolic Index</div>
+                <div class="score-value">${formatScore(scores.cmi)}</div>
+                <div class="score-max">/100</div>
+            </div>
+            <div class="score-card ${getClass(scores.cardiac)}">
+                <div class="score-label">Cardiac</div>
+                <div class="score-value">${formatScore(scores.cardiac)}</div>
+            </div>
+            <div class="score-card ${getClass(scores.activity)}">
+                <div class="score-label">Activity</div>
+                <div class="score-value">${formatScore(scores.activity)}</div>
+            </div>
+            <div class="score-card ${getClass(scores.recovery)}">
+                <div class="score-label">Recovery</div>
+                <div class="score-value">${formatScore(scores.recovery)}</div>
+            </div>
+            <div class="score-card ${getClass(scores.metabolic)}">
+                <div class="score-label">Metabolic</div>
+                <div class="score-value">${formatScore(scores.metabolic)}</div>
+            </div>
+        `;
+        
+        if (data.insights && data.insights.length > 0) {
+            html += `
+                <div class="insights-card">
+                    <div class="score-label">Insights</div>
+                    <ul>
+                        ${data.insights.map(i => `<li>${i}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+        
+        return html;
+    }
+    
+    async function simulateData() {
+        const status = document.getElementById('action-status');
+        status.innerHTML = '<p class="loading">Generating data...</p>';
+        
+        try {
+            const response = await fetch('/api/simulate-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: USER_ID, days: 7 })
+            });
+            const data = await response.json();
+            
+            status.innerHTML = `<p class="success">Generated ${data.records_generated} records for ${data.user_name}!</p>`;
+            
+            // Refresh displays
+            loadUserInfo();
+            refreshScores();
+            loadRecentData();
+        } catch (error) {
+            status.innerHTML = '<p class="error">Error generating data.</p>';
+        }
+    }
+    
+    async function loadRecentData() {
+        const container = document.getElementById('recent-data');
+        const viewMode = document.getElementById('view-mode').value;
+        const metricFilter = document.getElementById('metric-filter').value;
+        const days = document.getElementById('days-filter').value;
+        
+        container.innerHTML = '<p class="loading">Loading...</p>';
+        
+        try {
+            // Use history endpoint with filters
+            let url = `/api/user/${USER_ID}/health-data/history?days=${days}`;
+            if (metricFilter) {
+                url += `&metric=${metricFilter}`;
+            }
+            
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            if (data.data && data.data.length > 0) {
+                if (viewMode === 'latest') {
+                    container.innerHTML = renderLatestTable(data.data);
+                } else {
+                    container.innerHTML = renderHistoryTable(data.data, metricFilter);
+                }
+            } else {
+                container.innerHTML = '<p>No data available. Generate test data first.</p>';
+            }
+        } catch (error) {
+            container.innerHTML = '<p class="error">Error loading data.</p>';
+        }
+    }
+    
+    function renderLatestTable(records) {
+        // Group by metric type and show latest values
+        const latest = {};
+        records.forEach(r => {
+            if (!latest[r.metric_type] || new Date(r.timestamp) > new Date(latest[r.metric_type].timestamp)) {
+                latest[r.metric_type] = r;
+            }
+        });
+        
+        const rows = Object.values(latest)
+            .sort((a, b) => a.metric_type.localeCompare(b.metric_type))
+            .map(r => `
+                <tr>
+                    <td>${formatMetricName(r.metric_type)}</td>
+                    <td><strong>${formatValue(r.value, r.metric_type)}</strong> ${r.unit || ''}</td>
+                    <td>${formatDate(r.timestamp)}</td>
+                </tr>
+            `).join('');
+        
+        return `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Latest Value</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows}
+                </tbody>
+            </table>
+            <p class="data-count">Showing latest values (${Object.keys(latest).length} metrics from ${records.length} total records)</p>
+        `;
+    }
+    
+    function renderHistoryTable(records, metricFilter) {
+        // Show all records (limited to 50 for performance)
+        const displayRecords = records.slice(0, 50);
+        
+        const rows = displayRecords.map(r => `
+            <tr>
+                <td>${formatMetricName(r.metric_type)}</td>
+                <td><strong>${formatValue(r.value, r.metric_type)}</strong> ${r.unit || ''}</td>
+                <td>${formatDate(r.timestamp)}</td>
+            </tr>
+        `).join('');
+        
+        return `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows}
+                </tbody>
+            </table>
+            <p class="data-count">Showing ${displayRecords.length} of ${records.length} records${metricFilter ? ` (filtered: ${formatMetricName(metricFilter)})` : ''}</p>
+        `;
+    }
+    
+    function formatMetricName(metric) {
+        return metric.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    }
+    
+    function formatValue(value, metricType) {
+        if (metricType === 'steps' || metricType === 'calories') {
+            return Math.round(value).toLocaleString();
+        }
+        return typeof value === 'number' ? value.toFixed(1) : value;
+    }
+    
+    function formatDate(timestamp) {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 0) {
+            return `Today ${date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+        } else if (diffDays === 1) {
+            return `Yesterday ${date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+        } else {
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        }
+    }
+</script>
+{% endblock %}
+

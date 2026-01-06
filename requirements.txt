@@ -1,0 +1,49 @@
+# ==============================================
+# VitalAI - Health Intelligence Platform
+# Requirements (100% Free Stack)
+# ==============================================
+
+# Web Framework
+flask>=3.0.0
+flask-sqlalchemy>=3.1.0
+flask-cors>=4.0.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# LLM (via Ollama API - runs locally)
+ollama>=0.3.0
+requests>=2.31.0
+
+# RAG & Embeddings
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# LangChain ecosystem (for agents)
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langgraph>=0.2.0
+
+# Speech-to-Text (Whisper - runs locally)
+openai-whisper>=20231117
+
+# Text-to-Speech
+pyttsx3>=2.90
+
+# Translation (runs locally)
+transformers>=4.40.0
+sentencepiece>=0.1.99
+accelerate>=0.25.0
+
+# PyTorch (for transformers/whisper)
+torch>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+numpy>=1.26.0
+pandas>=2.1.0
+
+# Scheduling (for medication reminders)
+apscheduler>=3.10.0
+

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}VitalAI{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- HTMX for dynamic updates without full page reload -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/">VitalAI</a>
+        </div>
+        <div class="nav-links">
+            <a href="/" class="{% if request.endpoint == 'index' %}active{% endif %}">Dashboard</a>
+            <a href="/chat" class="{% if request.endpoint == 'chat_page' %}active{% endif %}">Chat</a>
+            <a href="#" onclick="handleLogout(event)" style="cursor: pointer;">Logout</a>
+        </div>
+    </nav>
+    
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    
+    <footer class="footer">
+        <p>VitalAI - Health Intelligence Platform (Demo)</p>
+    </footer>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>
+
