@@ -213,7 +213,7 @@ User Query
 
 ```bash
 git clone <repository-url>
-cd Learn_RAG
+cd VitalAI
 ```
 
 ### 2. Create Virtual Environment
@@ -410,7 +410,7 @@ The platform exposes 8 tools through the Model Context Protocol:
 ## Project Structure
 
 ```
-Learn_RAG/
+VitalAI/
 ├── app.py                    # Flask application entry point
 ├── config.py                 # Application configuration
 ├── extensions.py             # Flask extensions initialization
